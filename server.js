@@ -148,3 +148,189 @@ io.on('connection', (socket) => {
 
   socket.on('join-room', ({ roomId, username }) => {
     try {
+      if (!roomId) roomId = 'room-' + Math.random().toString(36).slice(2, 9).toUpperCase();
+      const name = (username && String(username).slice(0, 48)) || 'Anonymous';
+
+      socket.join(roomId);
+      socket.data.roomId = roomId;
+      socket.data.username = name;
+
+      addParticipant(roomId, name);
+      const participants = listParticipants(roomId);
+
+      socket.emit('joined', { roomId, participants });
+      socket.to(roomId).emit('user-joined', { username: name, participants });
+
+      // send recent history
+      const history = getRecentMessages(roomId, 50);
+      if (history && history.length) {
+        history.forEach(m => {
+          socket.emit('chat-message', {
+            id: m.id,
+            username: m.username,
+            text: m.content,
+            timestamp: m.created_at,
+            type: m.type,
+            filename: m.filename,
+            mime: m.mime
+          });
+        });
+      }
+
+      console.log(`${name} joined ${roomId} (participants: ${participants.length})`);
+    } catch (err) {
+      console.error('join-room error:', err);
+      socket.emit('error-message', { message: 'join-room failed: ' + String(err.message || err) });
+    }
+  });
+
+  // Support both 'chat-message' and 'message'
+  socket.on('chat-message', (payload, ack) => {
+    handleIncomingMessage(socket, payload || {}, ack);
+  });
+  socket.on('message', (payload, ack) => {
+    handleIncomingMessage(socket, payload || {}, ack);
+  });
+
+  function handleIncomingMessage(socket, msg = {}, ack) {
+    try {
+      const roomId = msg.roomId || socket.data.roomId;
+      const text = (msg.text || '').toString().trim();
+      const username = msg.username || socket.data.username || 'Anonymous';
+
+      if (!roomId || !text) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Invalid payload' });
+        return;
+      }
+
+      const messageData = {
+        id: 'msg-' + uuidv4(),
+        room_id: roomId,
+        username,
+        content: text,
+        type: msg.type || 'text',
+        filename: msg.filename || null,
+        mime: msg.mime || null,
+        created_at: Date.now()
+      };
+
+      try {
+        storeMessage(messageData);
+      } catch (dbErr) {
+        console.error('DB store error:', dbErr);
+        if (typeof ack === 'function') ack({ ok: false, error: String(dbErr.message || dbErr) });
+        socket.emit('error-message', { message: 'Store failed: ' + String(dbErr.message || dbErr) });
+        return;
+      }
+
+      io.to(roomId).emit('chat-message', {
+        id: messageData.id,
+        username: messageData.username,
+        text: messageData.content,
+        timestamp: messageData.created_at,
+        type: messageData.type,
+        filename: messageData.filename,
+        mime: messageData.mime
+      });
+
+      if (typeof ack === 'function') ack({ ok: true, id: messageData.id });
+
+      console.log(`Stored & emitted message [${messageData.id}] in ${roomId} from ${username}`);
+    } catch (err) {
+      console.error('handleIncomingMessage error:', err);
+      if (typeof ack === 'function') ack({ ok: false, error: String(err.message || err) });
+      socket.emit('error-message', { message: 'Send failed: ' + String(err.message || err) });
+    }
+  }
+
+  // Typing indicators
+  socket.on('typing', ({ roomId } = {}) => {
+    const r = roomId || socket.data.roomId;
+    const username = socket.data.username || 'Someone';
+    if (r) socket.to(r).emit('typing', { username });
+  });
+
+  socket.on('stop-typing', ({ roomId } = {}) => {
+    const r = roomId || socket.data.roomId;
+    const username = socket.data.username || 'Someone';
+    if (r) socket.to(r).emit('stop-typing', { username });
+  });
+
+  // End session (client requested leave)
+  socket.on('end-session', ({ roomId, username } = {}) => {
+    try {
+      const r = roomId || socket.data.roomId;
+      const name = username || socket.data.username;
+      if (r && name) {
+        socket.leave(r);
+        removeParticipant(r, name);
+        const participants = listParticipants(r);
+        io.to(r).emit('participants', { participants });
+        io.to(r).emit('user-left', { username: name, participants });
+        console.log(`end-session: ${name} left ${r}`);
+      }
+    } catch (err) {
+      console.error('end-session error:', err);
+    }
+  });
+
+  // File metadata over socket
+  socket.on('file', (fileMsg = {}) => {
+    try {
+      const roomId = fileMsg.roomId || socket.data.roomId;
+      const username = fileMsg.username || socket.data.username || 'Anonymous';
+      if (!roomId || !fileMsg.url) {
+        socket.emit('error-message', { message: 'Invalid file payload' });
+        return;
+      }
+
+      const fileId = 'file-' + uuidv4();
+      const fileData = {
+        id: fileId,
+        room_id: roomId,
+        username,
+        content: fileMsg.url,
+        type: 'file',
+        filename: fileMsg.filename || null,
+        mime: fileMsg.mime || null,
+        created_at: Date.now()
+      };
+
+      storeMessage(fileData);
+
+      io.to(roomId).emit('file', {
+        id: fileData.id,
+        username: fileData.username,
+        url: fileMsg.url,
+        filename: fileMsg.filename,
+        ts: fileData.created_at
+      });
+
+      console.log(`File message stored & emitted in ${roomId} by ${username}: ${fileMsg.filename || fileMsg.url}`);
+    } catch (err) {
+      console.error('file handler error:', err);
+      socket.emit('error-message', { message: 'File send failed: ' + String(err.message || err) });
+    }
+  });
+
+  // When disconnecting, notify other participants
+  socket.on('disconnecting', () => {
+    const name = socket.data.username;
+    for (const r of socket.rooms) {
+      if (r === socket.id) continue;
+      removeParticipant(r, name);
+      const participants = listParticipants(r);
+      socket.to(r).emit('user-left', { username: name, participants });
+    }
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('Socket disconnected:', socket.id, 'reason:', reason);
+  });
+});
+
+// --- Start server ---
+// Bind to 0.0.0.0 so other devices (and Render) can reach it
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🟢 Server running on port ${PORT}`);
+});
