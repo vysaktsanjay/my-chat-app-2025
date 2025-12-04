@@ -111,14 +111,16 @@
         <label>Room ID:</label>
         <input id="roomInput" type="text" placeholder="Enter room ID">
 
-        <!-- NEW: CREATE + JOIN buttons -->
+        <!-- CREATE + JOIN buttons -->
         <div class="room-controls">
             <button id="createRoomBtn">Create Room</button>
             <button id="joinRoomBtn">Join Room</button>
         </div>
 
+        <!-- Participants display -->
         <div id="participantsLabel" style="margin-top:10px; color:#0f0;"></div>
 
+        <!-- Chat messages -->
         <div id="messages"></div>
         <div id="typingIndicator"></div>
 
@@ -130,10 +132,10 @@
         <button id="endSessionBtn">End Session</button>
     </div>
 
-    <!-- Load socket.io -->
+    <!-- Load Socket.io -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-    <!-- Your app.js -->
+    <!-- Client script -->
     <script src="app.js"></script>
 </body>
 </html>
