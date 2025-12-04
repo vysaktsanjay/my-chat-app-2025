@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "postinstall": "npm rebuild better-sqlite3 --build-from-source"
+    "postinstall": "npm rebuild better-sqlite3 --build-from-source",
     "dev": "nodemon server.js --watch . --ext js,html,css"
   },
   "keywords": [],
