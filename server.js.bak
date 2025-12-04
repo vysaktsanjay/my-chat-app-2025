@@ -1,0 +1,236 @@
+// server.js
+// Secure Chat Server - Render Ready + Mobile Access + Socket.IO + Uploads
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const Database = require('better-sqlite3');
+const { Server } = require('socket.io');
+
+const APP_ROOT = __dirname;
+const PUBLIC_DIR = path.join(APP_ROOT, "public");
+const UPLOADS_DIR = path.join(PUBLIC_DIR, "uploads");
+
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// Multer storage for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9\-_]/gi, "_");
+    const filename = `${Date.now()}-${uuidv4()}-${base}${ext}`;
+    cb(null, filename);
+  }
+});
+const upload = multer({ storage });
+
+const app = express();
+const server = http.createServer(app);
+
+// SOCKET.IO with permissive CORS for testing (change origin for production)
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+// PORT
+const PORT = process.env.PORT || 3001;
+
+// ---------- DATABASE SETUP ----------
+const DB_PATH = path.join(APP_ROOT, "db", "messages.sqlite");
+const DB_DIR = path.dirname(DB_PATH);
+if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+
+const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    room_id TEXT,
+    username TEXT,
+    content TEXT,
+    type TEXT,
+    created_at INTEGER
+);
+`);
+
+function storeMessage(msg) {
+  const stmt = db.prepare(
+    `INSERT INTO messages (id, room_id, username, content, type, created_at)
+     VALUES (@id, @room_id, @username, @content, @type, @created_at)`
+  );
+  stmt.run(msg);
+}
+
+// ---------- STATIC FILE HOSTING ----------
+app.use("/uploads", express.static(UPLOADS_DIR));
+app.use(express.static(PUBLIC_DIR));
+
+// Upload endpoint
+app.post("/upload", upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file" });
+  res.json({
+    url: `/uploads/${req.file.filename}`,
+    filename: req.file.originalname
+  });
+});
+
+// Serve index.html
+app.get("/", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+});
+
+// ---------- In-memory participants map ----------
+const rooms = {}; // { roomId: Set(username) }
+
+// ---------- SOCKET.IO LOGIC (adjusted to client) ----------
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+
+  // initialize data
+  socket.data.username = null;
+  socket.data.roomId = null;
+
+  // Client expects 'join-room'
+  socket.on("join-room", ({ roomId, username }) => {
+    try {
+      if (!roomId) roomId = "room-" + uuidv4();
+      const name = (username && String(username)) || "Anonymous";
+
+      socket.join(roomId);
+      socket.data.roomId = roomId;
+      socket.data.username = name;
+
+      // Add to participants set
+      rooms[roomId] = rooms[roomId] || new Set();
+      rooms[roomId].add(name);
+
+      const participants = Array.from(rooms[roomId]);
+
+      // Confirm to the joining client
+      socket.emit("joined", { roomId, participants });
+
+      // Notify others
+      socket.to(roomId).emit("user-joined", { username: name, participants });
+
+      console.log(`${name} joined ${roomId} (participants: ${participants.length})`);
+    } catch (err) {
+      console.error("Error in join-room:", err);
+    }
+  });
+
+  // Client expects 'chat-message'
+  socket.on("chat-message", ({ roomId, text }, ack) => {
+    try {
+      const username = socket.data.username || 'Anonymous';
+      const payload = {
+        username,
+        text: String(text || ''),
+        timestamp: new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' })
+      };
+
+      // Store in DB
+      const messageData = {
+        id: "msg-" + uuidv4(),
+        room_id: roomId,
+        username: username,
+        content: payload.text,
+        type: "text",
+        created_at: Date.now()
+      };
+      storeMessage(messageData);
+
+      // Emit to everyone in room (including sender if you want)
+      io.to(roomId).emit("chat-message", payload);
+
+      if (typeof ack === "function") ack({ ok: true });
+      console.log(`chat-message [${roomId}] ${username}: ${payload.text}`);
+    } catch (err) {
+      console.error("Error in chat-message:", err);
+      if (typeof ack === "function") ack({ ok: false, error: err.message });
+    }
+  });
+
+  // typing indicators
+  socket.on("typing", ({ roomId }) => {
+    const username = socket.data.username || "Someone";
+    socket.to(roomId).emit("typing", { username });
+  });
+  socket.on("stop-typing", ({ roomId }) => {
+    const username = socket.data.username || "Someone";
+    socket.to(roomId).emit("stop-typing", { username });
+  });
+
+  // client may send end-session
+  socket.on("end-session", ({ roomId, username }) => {
+    try {
+      const name = username || socket.data.username;
+      socket.leave(roomId);
+      if (rooms[roomId]) {
+        rooms[roomId].delete(name);
+        const participants = Array.from(rooms[roomId]);
+        io.to(roomId).emit("participants", { participants });
+      }
+      console.log(`end-session: ${name} left ${roomId}`);
+    } catch (err) {
+      console.error("Error in end-session:", err);
+    }
+  });
+
+  // handle file messages (keeps your previous API)
+  socket.on("file", (fileMsg) => {
+    try {
+      const username = socket.data.username || 'Anonymous';
+      const fileData = {
+        id: "file-" + uuidv4(),
+        room_id: fileMsg.roomId,
+        username: username,
+        content: JSON.stringify({ url: fileMsg.url, filename: fileMsg.filename }),
+        type: "file",
+        created_at: Date.now()
+      };
+      storeMessage(fileData);
+      io.to(fileMsg.roomId).emit("file", {
+        username,
+        url: fileMsg.url,
+        filename: fileMsg.filename,
+        ts: Date.now()
+      });
+      console.log(`file uploaded in ${fileMsg.roomId} by ${username}: ${fileMsg.filename}`);
+    } catch (err) {
+      console.error("Error in file handler:", err);
+    }
+  });
+
+  // when a socket is leaving/disconnecting, remove from participants and inform room
+  socket.on("disconnecting", () => {
+    const name = socket.data.username;
+    for (const roomId of socket.rooms) {
+      // socket.rooms includes the socket id itself, so guard that
+      if (roomId === socket.id) continue;
+      if (rooms[roomId]) {
+        rooms[roomId].delete(name);
+        const participants = Array.from(rooms[roomId]);
+        socket.to(roomId).emit("user-left", { username: name, participants });
+      }
+    }
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("Socket disconnected:", socket.id, "reason:", reason);
+  });
+});
+
+// ---------- START SERVER ----------
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`🟢 Server running on port ${PORT}`);
+});

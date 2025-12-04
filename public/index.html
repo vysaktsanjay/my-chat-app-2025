@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secure Chat</title>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: white;
+        }
+
+        .container {
+            max-width: 500px;
+            margin: auto;
+            background: #333;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        input, button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+        }
+
+        button {
+            cursor: pointer;
+            background: #008cff;
+            color: white;
+            font-weight: bold;
+        }
+
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            background: #111;
+            padding: 10px;
+            margin-top: 15px;
+            border-radius: 8px;
+        }
+
+        .msg {
+            background: #444;
+            padding: 8px;
+            margin: 6px 0;
+            border-radius: 6px;
+        }
+
+        .me {
+            background: #007bff;
+            text-align: right;
+        }
+
+        .sys {
+            color: #aaa;
+            font-style: italic;
+        }
+
+        .ts {
+            font-size: 12px;
+            color: #ccc;
+        }
+
+        .room-controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        .room-controls button {
+            width: 50%;
+            background: #28a745;
+        }
+
+        #joinRoomBtn {
+            background: #ff9800;
+        }
+
+        #disconnectBtn {
+            background: red;
+            margin-top: 20px;
+        }
+
+        #endSessionBtn {
+            background: #555;
+        }
+
+        #typingIndicator {
+            color: #00eaff;
+            font-style: italic;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+
+        <h2>Secure Chat</h2>
+
+        <label>Enter Your Name:</label>
+        <input id="usernameInput" type="text" placeholder="Your name">
+
+        <label>Room ID:</label>
+        <input id="roomInput" type="text" placeholder="Enter room ID">
+
+        <!-- NEW: CREATE + JOIN buttons -->
+        <div class="room-controls">
+            <button id="createRoomBtn">Create Room</button>
+            <button id="joinRoomBtn">Join Room</button>
+        </div>
+
+        <div id="participantsLabel" style="margin-top:10px; color:#0f0;"></div>
+
+        <div id="messages"></div>
+        <div id="typingIndicator"></div>
+
+        <input id="messageInput" type="text" placeholder="Type a message...">
+
+        <button id="sendBtn">Send Message</button>
+
+        <button id="disconnectBtn">Disconnect</button>
+        <button id="endSessionBtn">End Session</button>
+    </div>
+
+    <!-- Load socket.io -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <!-- Your app.js -->
+    <script src="app.js"></script>
+</body>
+</html>
