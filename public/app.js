@@ -1,18 +1,23 @@
 // public/app.js
 (() => {
-  // If running on localhost use the default io() (connect to same host).
-  // Otherwise point to your Render URL so mobile / remote clients connect correctly.
-  const RENDER_URL = "https://secure-chat-0t5p.onrender.com";
-  const useRemote = location.hostname !== "localhost" && location.hostname !== "127.0.0.1";
-  const socket = useRemote
-    ? io(RENDER_URL, { transports: ["websocket"] })
-    : io();
+  console.info("Secure Chat client loaded...");
+
+  // --- Socket.IO: connect to same origin on the correct path and force websocket transport
+  const socket = io({
+    path: '/socket.io',
+    transports: ['websocket'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    secure: location.protocol === 'https:'
+  });
 
   // --- DOM elements (expected IDs in your index.html) ---
   const usernameInput = document.getElementById("usernameInput");
   const partnerInput = document.getElementById("partnerInput"); // optional
   const roomInput = document.getElementById("roomInput");
-  const joinBtn = document.getElementById("joinBtn");
+  // support both "joinBtn" and "joinRoomBtn" ids (robust)
+  const joinBtn = document.getElementById("joinBtn") || document.getElementById("joinRoomBtn");
   const sendBtn = document.getElementById("sendBtn");
   const messageInput = document.getElementById("messageInput");
   const messagesDiv = document.getElementById("messages");
@@ -111,12 +116,12 @@
 
   function emitTyping() {
     if (!currentRoom) return;
-    socket.emit("typing", { roomId: currentRoom });
+    socket.emit("typing", { roomId: currentRoom, username: myName });
   }
 
   function emitStopTyping() {
     if (!currentRoom) return;
-    socket.emit("stop-typing", { roomId: currentRoom });
+    socket.emit("stop-typing", { roomId: currentRoom, username: myName });
   }
 
   function scheduleStopTyping() {
@@ -143,8 +148,10 @@
       appendSystem(`Creating and joining ${rid}...`);
 
       // Trigger the same join flow that joinBtn does
-      if (joinBtn) joinBtn.click();
-      else {
+      if (joinBtn) {
+        // make sure join handler runs (it will use the roomInput)
+        joinBtn.click();
+      } else {
         // fallback: directly emit join
         const username = (usernameInput && usernameInput.value) ? usernameInput.value.trim() : "Anonymous";
         myName = username;
@@ -175,6 +182,8 @@
       // optimistic controls while server confirms
       setControlsForJoined(true);
     });
+  } else {
+    console.warn("joinBtn not found in DOM (expected id 'joinBtn' or 'joinRoomBtn')");
   }
 
   // Send message — IMPORTANT: do NOT append locally (avoid duplicates).
